@@ -93,30 +93,52 @@ async def parse_and_solve(soup: BeautifulSoup, html: str, url: str, client: http
     text_lower = text.lower()
     
     # Demo quiz
-    if '/demo' in url and 'demo' not in url.split('/')[-1]:
+    if '/demo' in url and url.endswith('/demo'):
         return "test"
     
-    # Extract secret from page
-    if 'scrape' in url or ('secret' in text_lower and 'find' in text_lower):
-        # Look for hidden elements or specific patterns
-        for tag in soup.find_all(['span', 'div', 'p', 'code', 'pre']):
-            tag_text = tag.get_text(strip=True)
-            if re.match(r'^[a-zA-Z0-9]{6,20}$', tag_text):
-                return tag_text
+    # Demo-scrape: Extract secret number from text
+    if 'scrape' in url or 'secret code is' in text_lower:
+        # Pattern: "Secret code is X and not Y" - extract X
+        match = re.search(r'secret\s+code\s+is\s+(\d+)\s+and\s+not', text, re.IGNORECASE)
+        if match:
+            return match.group(1)
         
-        # Try pattern matching
-        secret_match = re.search(r'\b([a-zA-Z0-9]{8,})\b', text)
-        if secret_match:
-            return secret_match.group(1)
+        # Fallback: look for "is NUMBER"
+        match = re.search(r'is\s+(\d+)', text)
+        if match:
+            return match.group(1)
     
-    # Audio sum task
+    # Demo-audio: CSV filtering task
     if 'audio' in url.lower():
-        # Find all numbers mentioned
-        numbers = re.findall(r'\b(\d+)\b', text)
-        if len(numbers) >= 2:
-            return str(sum(int(n) for n in numbers))
+        # Find cutoff value
+        cutoff_match = re.search(r'cutoff:?\s*(\d+)', text, re.IGNORECASE)
+        cutoff = int(cutoff_match.group(1)) if cutoff_match else 0
+        
+        # Find CSV link
+        links = soup.find_all('a', href=True)
+        for link in links:
+            href = link['href']
+            if '.csv' in href.lower():
+                try:
+                    import pandas as pd
+                    from io import StringIO
+                    
+                    file_url = urljoin(base_url, href)
+                    file_response = await client.get(file_url)
+                    df = pd.read_csv(StringIO(file_response.text))
+                    
+                    # Get first column
+                    first_col = df.iloc[:, 0]
+                    
+                    # Filter values >= cutoff and sum
+                    filtered_sum = first_col[first_col >= cutoff].sum()
+                    
+                    return str(int(filtered_sum))
+                except Exception as e:
+                    # Fallback: return cutoff if can't process
+                    return str(cutoff)
     
-    # CSV/file download tasks
+    # General CSV download tasks
     links = soup.find_all('a', href=True)
     for link in links:
         href = link['href']
@@ -128,16 +150,19 @@ async def parse_and_solve(soup: BeautifulSoup, html: str, url: str, client: http
                 file_response = await client.get(file_url)
                 df = pd.read_csv(StringIO(file_response.text))
                 
-                if 'sum' in text_lower:
+                if 'sum' in text_lower or 'total' in text_lower:
                     numeric_cols = df.select_dtypes(include=['number']).columns
                     if len(numeric_cols) > 0:
                         return str(int(df[numeric_cols[0]].sum()))
+                
+                if 'count' in text_lower or 'how many' in text_lower:
+                    return str(len(df))
                 
                 return str(len(df))
             except:
                 pass
     
-    # Sum/addition tasks
+    # Sum tasks
     if any(word in text_lower for word in ['sum', 'add', 'total']):
         numbers = re.findall(r'\b\d+\b', text)
         if numbers:
@@ -148,10 +173,9 @@ async def parse_and_solve(soup: BeautifulSoup, html: str, url: str, client: http
         numbers = re.findall(r'\b\d+\b', text)
         return str(len(numbers))
     
-    # Default
+    # Default fallback
     numbers = re.findall(r'\b\d+\b', text)
     if numbers:
         return numbers[0]
     
     return "test"
-
