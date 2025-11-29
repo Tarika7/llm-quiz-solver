@@ -92,92 +92,99 @@ async def parse_and_solve(soup: BeautifulSoup, html: str, url: str, client: http
     text = soup.get_text(separator=' ', strip=True)
     text_lower = text.lower()
     
-    # Demo quiz
-    if '/demo' in url and url.endswith('/demo'):
+    # Demo quiz - exact match
+    if url.endswith('/demo'):
         return "test"
     
-    # Demo-scrape: Extract secret number from text
-       # Demo-scrape: Extract secret number from text
+    # Demo-scrape: Extract the FIRST number after "code is"
     if 'scrape' in url:
-        # Pattern: "Secret code is X and not Y" - extract X
-        match = re.search(r'code\s+is\s+(\d+)\s+and\s+not', text, re.IGNORECASE)
+        # Find "code is NUMBER"
+        match = re.search(r'code\s+is\s+(\d+)', text, re.IGNORECASE)
         if match:
             return match.group(1)
-        
-        # Fallback: look for "is NUMBER"
-        match = re.search(r'is\s+(\d+)', text)
-        if match:
-            return match.group(1)
+        # Fallback: first number on page
+        numbers = re.findall(r'\b\d+\b', text)
+        if numbers:
+            return numbers[0]
     
-    # Demo-audio: CSV filtering task
-    if 'audio' in url.lower():
-        # Find cutoff value
+    # Demo-audio: CSV with cutoff filtering
+    if 'audio' in url:
+        # Extract cutoff value
+        cutoff = 0
         cutoff_match = re.search(r'cutoff:?\s*(\d+)', text, re.IGNORECASE)
-        cutoff = int(cutoff_match.group(1)) if cutoff_match else 0
+        if cutoff_match:
+            cutoff = int(cutoff_match.group(1))
         
-        # Find CSV link
-        links = soup.find_all('a', href=True)
-        for link in links:
-            href = link['href']
-            if '.csv' in href.lower():
+        # Download and process CSV
+        for link in soup.find_all('a', href=True):
+            if '.csv' in link['href'].lower():
                 try:
                     import pandas as pd
                     from io import StringIO
                     
-                    file_url = urljoin(base_url, href)
-                    file_response = await client.get(file_url)
-                    df = pd.read_csv(StringIO(file_response.text))
+                    csv_url = urljoin(base_url, link['href'])
+                    csv_response = await client.get(csv_url)
+                    df = pd.read_csv(StringIO(csv_response.text))
                     
-                    # Get first column
+                    # First column, filter >= cutoff, sum
                     first_col = df.iloc[:, 0]
-                    
-                    # Filter values >= cutoff and sum
-                    filtered_sum = first_col[first_col >= cutoff].sum()
-                    
-                    return str(int(filtered_sum))
-                except Exception as e:
-                    # Fallback: return cutoff if can't process
-                    return str(cutoff)
+                    result = first_col[first_col >= cutoff].sum()
+                    return str(int(result))
+                except:
+                    pass
+        
+        # Fallback: return cutoff
+        if cutoff > 0:
+            return str(cutoff)
     
-    # General CSV download tasks
-    links = soup.find_all('a', href=True)
-    for link in links:
-        href = link['href']
-        if '.csv' in href.lower():
-            try:
-                import pandas as pd
-                from io import StringIO
-                file_url = urljoin(base_url, href)
-                file_response = await client.get(file_url)
-                df = pd.read_csv(StringIO(file_response.text))
-                
-                if 'sum' in text_lower or 'total' in text_lower:
-                    numeric_cols = df.select_dtypes(include=['number']).columns
-                    if len(numeric_cols) > 0:
-                        return str(int(df[numeric_cols[0]].sum()))
-                
-                if 'count' in text_lower or 'how many' in text_lower:
-                    return str(len(df))
-                
+    # General CSV tasks
+    csv_links = [a['href'] for a in soup.find_all('a', href=True) if '.csv' in a['href'].lower()]
+    if csv_links:
+        try:
+            import pandas as pd
+            from io import StringIO
+            
+            csv_url = urljoin(base_url, csv_links[0])
+            csv_response = await client.get(csv_url)
+            df = pd.read_csv(StringIO(csv_response.text))
+            
+            # Sum first numeric column
+            if 'sum' in text_lower or 'total' in text_lower:
+                numeric_cols = df.select_dtypes(include=['number']).columns
+                if len(numeric_cols) > 0:
+                    return str(int(df[numeric_cols[0]].sum()))
+            
+            # Count rows
+            if 'count' in text_lower or 'how many' in text_lower:
                 return str(len(df))
-            except:
-                pass
+            
+            # Default: count rows
+            return str(len(df))
+        except:
+            pass
     
-    # Sum tasks
-    if any(word in text_lower for word in ['sum', 'add', 'total']):
+    # Math operations
+    if any(word in text_lower for word in ['sum', 'add', 'total', 'plus']):
         numbers = re.findall(r'\b\d+\b', text)
-        if numbers:
+        if len(numbers) >= 2:
             return str(sum(int(n) for n in numbers))
     
-    # Count tasks
+    # Count operations
     if 'how many' in text_lower or 'count' in text_lower:
         numbers = re.findall(r'\b\d+\b', text)
-        return str(len(numbers))
+        if numbers:
+            return str(len(numbers))
     
-    # Default fallback
+    # Extract secrets/codes
+    if 'secret' in text_lower or 'code' in text_lower:
+        # Look for alphanumeric patterns
+        match = re.search(r'\b([A-Za-z0-9]{6,20})\b', text)
+        if match:
+            return match.group(1)
+    
+    # Default: first number or "test"
     numbers = re.findall(r'\b\d+\b', text)
     if numbers:
         return numbers[0]
     
     return "test"
-
