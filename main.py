@@ -97,9 +97,10 @@ async def parse_and_solve(soup: BeautifulSoup, html: str, url: str, client: http
         return "test"
     
     # Demo-scrape: Extract secret number from text
-    if 'scrape' in url or 'secret code is' in text_lower:
+       # Demo-scrape: Extract secret number from text
+    if 'scrape' in url:
         # Pattern: "Secret code is X and not Y" - extract X
-        match = re.search(r'secret\s+code\s+is\s+(\d+)\s+and\s+not', text, re.IGNORECASE)
+        match = re.search(r'code\s+is\s+(\d+)\s+and\s+not', text, re.IGNORECASE)
         if match:
             return match.group(1)
         
@@ -179,3 +180,4 @@ async def parse_and_solve(soup: BeautifulSoup, html: str, url: str, client: http
         return numbers[0]
     
     return "test"
+
