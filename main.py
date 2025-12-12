@@ -96,25 +96,44 @@ async def parse_and_solve(soup: BeautifulSoup, html: str, url: str, client: http
     if url.endswith('/demo'):
         return "test"
     
-    # Demo-scrape: Extract secret number - FIXED REGEX
+    # Demo-scrape: Need to download linked data page
     if 'scrape' in url:
-        # Look for "Secret code is X and not Y" - extract X (the correct one)
-        # Changed: removed re.IGNORECASE and made pattern more specific
+        # Look for links to data pages
+        for link in soup.find_all('a', href=True):
+            href = link['href']
+            # Check if it's a data page link
+            if 'scrape-data' in href or 'data' in href:
+                try:
+                    # Download the data page
+                    data_url = urljoin(base_url, href)
+                    data_response = await client.get(data_url)
+                    data_soup = BeautifulSoup(data_response.text, 'html.parser')
+                    data_text = data_soup.get_text(separator=' ', strip=True)
+                    
+                    # Extract secret from data page
+                    # Look for "Secret code is X and not Y"
+                    match = re.search(r'[Ss]ecret\s+code\s+is\s+(\d+)', data_text)
+                    if match:
+                        return match.group(1)
+                    
+                    # Fallback: any number pattern
+                    numbers = re.findall(r'\b\d+\b', data_text)
+                    if numbers:
+                        return numbers[0]
+                except:
+                    pass
+        
+        # If no data link found, try to extract from current page
         match = re.search(r'[Ss]ecret\s+code\s+is\s+(\d+)', text)
         if match:
             return match.group(1)
         
-        # Fallback: look for any "code is NUMBER" pattern
-        match = re.search(r'code\s+is\s+(\d+)', text, re.IGNORECASE)
-        if match:
-            return match.group(1)
-        
-        # Last fallback: first number on page
+        # Last fallback
         numbers = re.findall(r'\b\d+\b', text)
         if numbers:
             return numbers[0]
     
-    # Demo-audio: CSV with cutoff filtering - FIXED LOGIC
+    # Demo-audio: CSV with cutoff filtering
     if 'audio' in url:
         # Extract cutoff value
         cutoff = 0
@@ -134,9 +153,10 @@ async def parse_and_solve(soup: BeautifulSoup, html: str, url: str, client: http
                     df = pd.read_csv(StringIO(csv_response.text))
                     
                     # Get first column, filter values >= cutoff, then sum
-                    # FIXED: Ensure proper type conversion
-                    first_col = df.iloc[:, 0].astype(float)
-                    filtered_values = first_col[first_col >= cutoff]
+                    first_col = df.iloc[:, 0]
+                    # Convert to numeric, handling any non-numeric values
+                    first_col_numeric = pd.to_numeric(first_col, errors='coerce')
+                    filtered_values = first_col_numeric[first_col_numeric >= cutoff]
                     result_sum = filtered_values.sum()
                     
                     return str(int(result_sum))
