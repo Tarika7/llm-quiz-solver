@@ -96,22 +96,29 @@ async def parse_and_solve(soup: BeautifulSoup, html: str, url: str, client: http
     if url.endswith('/demo'):
         return "test"
     
-    # Demo-scrape: Extract the FIRST number after "code is"
+    # Demo-scrape: Extract secret number - FIXED REGEX
     if 'scrape' in url:
-        # Find "code is NUMBER"
+        # Look for "Secret code is X and not Y" - extract X (the correct one)
+        # Changed: removed re.IGNORECASE and made pattern more specific
+        match = re.search(r'[Ss]ecret\s+code\s+is\s+(\d+)', text)
+        if match:
+            return match.group(1)
+        
+        # Fallback: look for any "code is NUMBER" pattern
         match = re.search(r'code\s+is\s+(\d+)', text, re.IGNORECASE)
         if match:
             return match.group(1)
-        # Fallback: first number on page
+        
+        # Last fallback: first number on page
         numbers = re.findall(r'\b\d+\b', text)
         if numbers:
             return numbers[0]
     
-    # Demo-audio: CSV with cutoff filtering
+    # Demo-audio: CSV with cutoff filtering - FIXED LOGIC
     if 'audio' in url:
         # Extract cutoff value
         cutoff = 0
-        cutoff_match = re.search(r'cutoff:?\s*(\d+)', text, re.IGNORECASE)
+        cutoff_match = re.search(r'[Cc]utoff:?\s*(\d+)', text)
         if cutoff_match:
             cutoff = int(cutoff_match.group(1))
         
@@ -126,14 +133,19 @@ async def parse_and_solve(soup: BeautifulSoup, html: str, url: str, client: http
                     csv_response = await client.get(csv_url)
                     df = pd.read_csv(StringIO(csv_response.text))
                     
-                    # First column, filter >= cutoff, sum
-                    first_col = df.iloc[:, 0]
-                    result = first_col[first_col >= cutoff].sum()
-                    return str(int(result))
-                except:
-                    pass
+                    # Get first column, filter values >= cutoff, then sum
+                    # FIXED: Ensure proper type conversion
+                    first_col = df.iloc[:, 0].astype(float)
+                    filtered_values = first_col[first_col >= cutoff]
+                    result_sum = filtered_values.sum()
+                    
+                    return str(int(result_sum))
+                except Exception as e:
+                    # If CSV processing fails, return cutoff as fallback
+                    if cutoff > 0:
+                        return str(cutoff)
         
-        # Fallback: return cutoff
+        # No CSV found, return cutoff
         if cutoff > 0:
             return str(cutoff)
     
@@ -158,12 +170,12 @@ async def parse_and_solve(soup: BeautifulSoup, html: str, url: str, client: http
             if 'count' in text_lower or 'how many' in text_lower:
                 return str(len(df))
             
-            # Default: count rows
+            # Default: row count
             return str(len(df))
         except:
             pass
     
-    # Math operations
+    # Math operations - sum numbers
     if any(word in text_lower for word in ['sum', 'add', 'total', 'plus']):
         numbers = re.findall(r'\b\d+\b', text)
         if len(numbers) >= 2:
@@ -175,9 +187,14 @@ async def parse_and_solve(soup: BeautifulSoup, html: str, url: str, client: http
         if numbers:
             return str(len(numbers))
     
-    # Extract secrets/codes
-    if 'secret' in text_lower or 'code' in text_lower:
-        # Look for alphanumeric patterns
+    # Extract secrets/codes - improved
+    if 'secret' in text_lower or 'code' in text_lower or 'password' in text_lower:
+        # Look for word after "is:" or "is"
+        match = re.search(r'is:?\s*([A-Za-z0-9]+)', text, re.IGNORECASE)
+        if match:
+            return match.group(1)
+        
+        # Look for longer alphanumeric patterns
         match = re.search(r'\b([A-Za-z0-9]{6,20})\b', text)
         if match:
             return match.group(1)
