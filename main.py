@@ -89,6 +89,8 @@ async def solve_single_quiz(client: httpx.AsyncClient, email: str, secret: str, 
         }
 
 async def parse_and_solve(soup: BeautifulSoup, html: str, url: str, client: httpx.AsyncClient, base_url: str):
+    import base64
+    
     text = soup.get_text(separator=' ', strip=True)
     text_lower = text.lower()
     
@@ -96,49 +98,62 @@ async def parse_and_solve(soup: BeautifulSoup, html: str, url: str, client: http
     if url.endswith('/demo'):
         return "test"
     
-    # Demo-scrape quiz - downloads linked data page
+    # Demo-scrape quiz - handles JavaScript-rendered content
     if 'demo-scrape' in url and not 'data' in url:
-        # Find ALL links on the page
-        all_links = soup.find_all('a', href=True)
+        # Look for base64-encoded content in script tags
+        script_tags = soup.find_all('script')
         
-        for link in all_links:
-            href = link.get('href', '')
+        for script in script_tags:
+            script_content = script.string if script.string else ""
             
-            # Check if this is the data page link
-            if 'scrape-data' in href or (href.startswith('/demo-scrape-data') or href.startswith('demo-scrape-data')):
-                try:
-                    # Build full URL for data page
-                    if href.startswith('http'):
-                        data_url = href
-                    else:
-                        data_url = urljoin(base_url, href)
-                    
-                    # Download the data page
-                    data_response = await client.get(data_url)
-                    data_html = data_response.text
-                    data_soup = BeautifulSoup(data_html, 'html.parser')
-                    data_text = data_soup.get_text(separator=' ', strip=True)
-                    
-                    # Extract secret number from data page
-                    # Pattern: "Secret code is 12345 and not 67890"
-                    match = re.search(r'Secret\s+code\s+is\s+(\d+)\s+and\s+not', data_text, re.IGNORECASE)
-                    if match:
-                        return match.group(1)
-                    
-                    # Simpler pattern
-                    match = re.search(r'code\s+is\s+(\d+)', data_text, re.IGNORECASE)
-                    if match:
-                        return match.group(1)
-                    
-                    # Any number on data page
-                    numbers = re.findall(r'\b\d{5,}\b', data_text)
-                    if numbers:
-                        return numbers[0]
+            # Look for base64 encoded strings (starts with const code = )
+            if 'const code' in script_content or 'atob' in script_content:
+                # Extract base64 string
+                match = re.search(r'const code = `([^`]+)`', script_content)
+                if match:
+                    try:
+                        # Decode base64
+                        encoded = match.group(1)
+                        decoded = base64.b64decode(encoded).decode('utf-8')
                         
-                except Exception as e:
-                    continue
+                        # Extract link from decoded content
+                        link_match = re.search(r'href="([^"]+demo-scrape-data[^"]*)"', decoded)
+                        if link_match:
+                            data_link = link_match.group(1)
+                            
+                            # Replace $EMAIL placeholder with actual email
+                            email_match = re.search(r'email=([^&]+)', url)
+                            if email_match:
+                                email = email_match.group(1)
+                                data_link = data_link.replace('$EMAIL', email)
+                            
+                            # Build full URL
+                            data_url = urljoin(base_url, data_link)
+                            
+                            # Download data page
+                            data_response = await client.get(data_url)
+                            data_html = data_response.text
+                            data_soup = BeautifulSoup(data_html, 'html.parser')
+                            data_text = data_soup.get_text(separator=' ', strip=True)
+                            
+                            # Extract secret from data page
+                            secret_match = re.search(r'Secret\s+code\s+is\s+(\d+)\s+and\s+not', data_text, re.IGNORECASE)
+                            if secret_match:
+                                return secret_match.group(1)
+                            
+                            # Fallback patterns
+                            secret_match = re.search(r'code\s+is\s+(\d+)', data_text, re.IGNORECASE)
+                            if secret_match:
+                                return secret_match.group(1)
+                            
+                            # Any 5+ digit number
+                            numbers = re.findall(r'\b\d{5,}\b', data_text)
+                            if numbers:
+                                return numbers[0]
+                    except Exception as e:
+                        continue
         
-        # Fallback if data page not found
+        # Fallback
         return "test"
     
     # Demo-audio quiz - CSV processing with cutoff
